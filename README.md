@@ -1,6 +1,6 @@
 # Chargrid
 _Author: Antoine DELPLACE_  
-_Last update: 20/03/2020_
+_Last update: 23/03/2020_
 
 This repository corresponds to my implementation of "__Chargrid: Towards Understanding 2D Documents__" by A. R. Katti et al. The data used to test the model comes from the ICDAR 2019 Robust Reading Challenge on Scanned Receipts OCR and Information Extraction.
 
@@ -19,13 +19,16 @@ This repository corresponds to my implementation of "__Chargrid: Towards Underst
 - Matplotlib 3.1.1
 - Pytesseract 0.3.3 -- `preprocessing.py`
 - Tensorflow 2.0.0 -- `network.py`
+[TODO]
 
 ### File description
 1. The file `preprocessing.py` performs an optical character recognition on the image dataset. It creates a chargrid for each input image.
 
 2. The file `preprocessing_bis.py` reduces each chargrid to improve the training speed.
 
-3. The file `network.py` is in development.
+3. The file `preprocessing_ter.py` creates the scaled 1-hot encoding input images to train.
+
+4. The file `network.py` is in development.
 
 ## Results
 [TODO]

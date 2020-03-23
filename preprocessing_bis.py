@@ -3,19 +3,23 @@ import matplotlib.pyplot as plt
 import os
 
 ## Hyperparameters
-dir_img = "./data/np_chargrids/"
-list_filenames = [os.path.join(dir_img, f) for f in os.listdir(dir_img) if os.path.isfile(os.path.join(dir_img, f))]
+dir_np_chargrid = "./data/np_chargrids/"
+dir_np_gt = "./data/np_gt/"
+outdir_np_chargrid_reduced = "./data/np_chargrids_reduced/"
+outdir_png_chargrid_reduced = "./data/img_chargrids_reduced/"
+outdir_np_gt_reduced = "./data/np_gt_reduced/"
+outdir_png_gt_reduced = "./data/img_gt_reduced/"
+list_filenames = [f for f in os.listdir(dir_np_chargrid) if os.path.isfile(os.path.join(dir_np_chargrid, f))]
 equal_threshold = 0.95
 max_padding = 3
 
 def get_reduce(img, axis):
     reduce_f = 1
-    img2_f = np.array([])
     
     trust = 1.0
     reduce = 1
     #print(img.shape[axis])
-    while reduce < img.shape[axis]/2:
+    while reduce <= img.shape[axis]/2:
         reduce += 1
         if img.shape[axis]%reduce == 0:
             if axis == 0:
@@ -28,27 +32,52 @@ def get_reduce(img, axis):
             #print(reduce, trust)
             if trust > equal_threshold:
                 reduce_f = reduce
-                img2_f = img2
-    return reduce_f, img2_f
+    return reduce_f
 
 def get_max_reduce(img, axis):
-    reduce_f, img2_f = get_reduce(img, axis)
+    reduce_f = get_reduce(img, axis)
+    padding_left = 0
+    padding_right = 0
 
     for i in range(0, max_padding):
         img = np.insert(img, 0, 0, axis=axis)
-        reduce_f_, img2_f_ = get_reduce(img, axis)
+        reduce_f_ = get_reduce(img, axis)
         if reduce_f_ > reduce_f:
-            reduce_f, img2_f = reduce_f_, img2_f_
+            reduce_f = reduce_f_
+            padding_left = i+1
+            padding_right = i
             
         img = np.insert(img, 0, img.shape[axis], axis=axis)
-        reduce_f_, img2_f_ = get_reduce(img, axis)
+        reduce_f_ = get_reduce(img, axis)
         if reduce_f_ > reduce_f:
-            reduce_f, img2_f = reduce_f_, img2_f_
+            reduce_f = reduce_f_
+            padding_left = i+1
+            padding_right = i+1
     
-    return reduce_f, img2_f
+    return reduce_f, padding_left, padding_right
+
+def get_img_reduced(img, reduce_x, reduce_y, padding_left, padding_right, padding_top, padding_bot):
+    img2 = img
+    for i in range(0, padding_left):
+        img2 = np.insert(img2, 0, 0, axis=0)
+    for i in range(0, padding_right):
+        img2 = np.insert(img2, 0, img.shape[0], axis=0)
+    for i in range(0, padding_top):
+        img2 = np.insert(img2, 0, 0, axis=1)
+    for i in range(0, padding_bot):
+        img2 = np.insert(img2, 0, img.shape[1], axis=1)
+    
+    img2_reshaped = img2.reshape(img2.shape[0]//reduce_x, -1, img2.shape[1])
+    img2 = np.apply_along_axis(lambda x: np.bincount(x).argmax(), axis=1, arr=img2_reshaped)
+    
+    img2_reshaped = img2.reshape(img2.shape[0], img2.shape[1]//reduce_y, -1)
+    img2 = np.apply_along_axis(lambda x: np.bincount(x).argmax(), axis=2, arr=img2_reshaped)
+    
+    return img2
 
 for filename in list_filenames:
-    img = np.load(filename)
+    img = np.load(os.path.join(dir_np_chargrid, filename))
+    gt = np.load(os.path.join(dir_np_gt, filename))
     
     #print(np.shape(img))
     #plt.imshow(img)
@@ -56,23 +85,31 @@ for filename in list_filenames:
     #plt.clf()
     
     if np.shape(img) != (0, 0):
-        reduce_x, img2_x = get_max_reduce(img, 1)
-        print("final reduce_x = ", reduce_x)
+        reduce_x, padding_left, padding_right = get_max_reduce(img, 0)
+        print("final reduce_x = ", reduce_x, "padding_l = ", padding_left, "padding_r = ", padding_right)
         
-        reduce_y, img2_y = get_max_reduce(img2_x, 0)
-        print("final reduce_y = ", reduce_y)
+        reduce_y, padding_top, padding_bot = get_max_reduce(img, 1)
+        print("final reduce_y = ", reduce_y, "padding_t = ", padding_top, "padding_b = ", padding_bot)
         
+        img2 = get_img_reduced(img, reduce_x, reduce_y, padding_left, padding_right, padding_top, padding_bot)
+        gt2 = get_img_reduced(gt, reduce_x, reduce_y, padding_left, padding_right, padding_top, padding_bot)
+        
+        #gt2 = np.repeat(gt2, reduce_x, axis=0)
+        #gt2 = np.repeat(gt2, reduce_y, axis=1)
         #fig, (ax1, ax2) = plt.subplots(1, 2, sharey=True)
         #ax1.imshow(img)
-        #ax2.imshow(img2_y)
+        #ax2.imshow(gt2)
         #plt.show()
         #plt.clf()
         
-        ## Save
-        img2_y = img2_y[::reduce_x, ::reduce_y]
-        
-        np.save(filename.replace("np_chargrids", "np_chargrids_reduced"), img2_y)
+        ## Save        
+        np.save(os.path.join(outdir_np_chargrid_reduced, filename), img2)
+        np.save(os.path.join(outdir_np_gt_reduced, filename), gt2)
     
-        plt.imshow(img2_y)
-        plt.savefig(filename.replace("np_chargrids", "img_chargrids_reduced").replace("npy", "png"))
+        plt.imshow(img2)
+        plt.savefig(os.path.join(outdir_png_chargrid_reduced, filename).replace("npy", "png"))
+        plt.close()
+        
+        plt.imshow(gt2)
+        plt.savefig(os.path.join(outdir_png_gt_reduced, filename).replace("npy", "png"))
         plt.close()
