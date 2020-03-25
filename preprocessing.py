@@ -18,6 +18,7 @@ outdir_np_chargrid = "./data/np_chargrids/"
 outdir_png_chargrid = "./data/img_chargrids/"
 outdir_np_gt = "./data/np_gt/"
 outdir_png_gt = "./data/img_gt/"
+outdir_pd_bbox = "./data/pd_bbox/"
 list_filenames = [f for f in os.listdir(dir_img) if os.path.isfile(os.path.join(dir_img, f)) and os.path.isfile(os.path.join(dir_boxes, f).replace("jpg", "txt")) and os.path.isfile(os.path.join(dir_classes, f).replace("jpg", "txt"))]
 tesseract_conf_threshold = 10
 cosine_similarity_threshold = 0.4
@@ -30,8 +31,8 @@ def add_row_gt_pd(row, c, gt_pd):
     return gt_pd.append({
             'left':row['top_left_x'],
             'top':row['top_left_y'],
-            'width':row['top_right_x']-row['top_left_x'],
-            'height':row['bot_left_y']-row['top_left_y'],
+            'right':row['bot_right_x'],
+            'bot':row['bot_right_y'],
             'class':c
             }, ignore_index = True)
 
@@ -69,13 +70,13 @@ for filename in list_filenames:
     #plot_chargrid(img, chargrid_pd)
     
     ## Extract boxes with classes
-    gt_pd = pd.DataFrame(columns = ['left', 'top', 'width', 'height', 'class'])
+    gt_pd = pd.DataFrame(columns = ['left', 'top', 'right', 'bot', 'class'])
     pd_boxes = pd.DataFrame(columns=['top_left_x', 'top_left_y', 'top_right_x', 'top_right_y', 'bot_left_x', 'bot_left_y', 'bot_right_x', 'bot_right_y', 'text'])
     dic_class = dict()
     
     with open(os.path.join(dir_boxes, filename).replace("jpg", "txt")) as f:
         reader = f.read().splitlines()
-        pd_boxes = pd.DataFrame([x.split(",", 8) for x in reader], columns=['top_left_x', 'top_left_y', 'top_right_x', 'top_right_y', 'bot_left_x', 'bot_left_y', 'bot_right_x', 'bot_right_y', 'text'])
+        pd_boxes = pd.DataFrame([x.split(",", 8) for x in reader], columns=['top_left_x', 'top_left_y', 'top_right_x', 'top_right_y', 'bot_right_x', 'bot_right_y', 'bot_left_x', 'bot_left_y', 'text'])
     
         pd_boxes["top_left_x"] = pd_boxes["top_left_x"].astype('int')
         pd_boxes["top_left_y"] = pd_boxes["top_left_y"].astype('int')
@@ -131,13 +132,25 @@ for filename in list_filenames:
     gt_pd.sort_values(by="class", ascending=True, inplace=True)
     gt_pd.reset_index(drop=True, inplace=True)
     for index, row in gt_pd.iterrows():
-        gt_np[row['top']:row['top']+row['height'], row['left']:row['left']+row['width']] = row['class']
+        gt_np[row['top']:row['bot'], row['left']:row['right']] = row['class']
     
     #fig, (ax1, ax2) = plt.subplots(1, 2, sharey=True)
     #ax1.imshow(chargrid_np)
     #ax2.imshow(gt_np)
     #plt.show()
     #plt.clf()
+    
+    #print(gt_pd)
+    
+    tab_cumsum_todelete_x = np.cumsum(np.all(chargrid_np == 0, axis=0))
+    gt_pd['left'] -= tab_cumsum_todelete_x[gt_pd['left'].tolist()]
+    gt_pd['right'] -= tab_cumsum_todelete_x[gt_pd['right'].tolist()]
+    
+    tab_cumsum_todelete_y = np.cumsum(np.all(chargrid_np == 0, axis=1))
+    gt_pd['top'] -= tab_cumsum_todelete_y[gt_pd['top'].tolist()]
+    gt_pd['bot'] -= tab_cumsum_todelete_y[gt_pd['bot'].tolist()]
+    
+    #print(gt_pd)
     
     gt_np = gt_np[:,~np.all(chargrid_np == 0, axis=0)]
     gt_np = gt_np[~np.all(chargrid_np == 0, axis=1),:]
@@ -145,22 +158,21 @@ for filename in list_filenames:
     chargrid_np = chargrid_np[:,~np.all(chargrid_np == 0, axis=0)]
     chargrid_np = chargrid_np[~np.all(chargrid_np == 0, axis=1),:]
     
-    #print(gt_pd)
-    
     #fig, (ax1, ax2) = plt.subplots(1, 2, sharey=True)
     #ax1.imshow(chargrid_np)
     #ax2.imshow(gt_np)
     #plt.show()
     #plt.clf()
     
-    np.save(os.path.join(outdir_np_chargrid, filename).replace("jpg", "npy"), chargrid_np)
-    np.save(os.path.join(outdir_np_gt, filename).replace("jpg", "npy"), gt_np)
+    #np.save(os.path.join(outdir_np_chargrid, filename).replace("jpg", "npy"), chargrid_np)
+    #np.save(os.path.join(outdir_np_gt, filename).replace("jpg", "npy"), gt_np)
+    gt_pd.to_pickle(os.path.join(outdir_pd_bbox, filename).replace("jpg", "pkl"))
     
     ## Save chargrid png
-    plt.imshow(chargrid_np)
-    plt.savefig(os.path.join(outdir_png_chargrid, filename).replace("jpg", "png"))
-    plt.close()
+    #plt.imshow(chargrid_np)
+    #plt.savefig(os.path.join(outdir_png_chargrid, filename).replace("jpg", "png"))
+    #plt.close()
     
-    plt.imshow(gt_np)
-    plt.savefig(os.path.join(outdir_png_gt, filename).replace("jpg", "png"))
-    plt.close()
+    #plt.imshow(gt_np)
+    #plt.savefig(os.path.join(outdir_png_gt, filename).replace("jpg", "png"))
+    #plt.close()
