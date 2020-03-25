@@ -6,7 +6,7 @@ First preprocessing program that :
 - generates Chargrids from input images thanks to Tesseract
 - extracts bounding boxes for each class from the ground truth files
 - generates class segmentation from the class bounding boxes
-- reduce the size of images by removing empty rows and empty columns
+- reduces the size of images by removing empty rows and empty columns
 
 Requirements
 ----------
