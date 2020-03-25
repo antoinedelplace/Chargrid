@@ -1,3 +1,35 @@
+# -*- coding: utf-8 -*-
+# Author: Antoine DELPLACE
+# Last update: 25/03/2020
+"""
+First preprocessing program that :
+- generates Chargrids from input images thanks to Tesseract
+- extracts bounding boxes for each class from the ground truth files
+- generates class segmentation from the class bounding boxes
+- reduce the size of images by removing empty rows and empty columns
+
+Requirements
+----------
+- Tesseract must be installed in "C:\Program Files\Tesseract-OCR/tesseract"
+- Input images must be located in the folder dir_img = "./data/img_inputs/"
+- Input bounding boxes (ground truth) must be located in the folder dir_boxes = "./data/gt_boxes/"
+- Input classes (ground truth) must be located in the folder dir_classes = "./data/gt_classes/"
+
+Hyperparameters
+----------
+- tesseract_conf_threshold : gives a threshold below which the tesseract information is not kept
+- cosine_similarity_threshold : gives a threshold above which two strings are considered similar
+
+Return
+----------
+Several files are generated :
+- in outdir_np_chargrid = "./data/np_chargrids/" : Chargrids of each input image in npy (numpy array format)
+- in outdir_png_chargrid = "./data/img_chargrids/" : Chargrids of each input image in png
+- in outdir_np_gt = "./data/np_gt/" : Class Segmentation of each input image in npy (numpy array format)
+- in outdir_png_gt = "./data/img_gt/" : Class Segmentation of each input image in png
+- in outdir_pd_bbox = "./data/pd_bbox/" : Class Bounding Boxes of each input image in pkl (pandas dataframe format)
+"""
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -19,13 +51,10 @@ outdir_png_chargrid = "./data/img_chargrids/"
 outdir_np_gt = "./data/np_gt/"
 outdir_png_gt = "./data/img_gt/"
 outdir_pd_bbox = "./data/pd_bbox/"
-list_filenames = [f for f in os.listdir(dir_img) if os.path.isfile(os.path.join(dir_img, f)) and os.path.isfile(os.path.join(dir_boxes, f).replace("jpg", "txt")) and os.path.isfile(os.path.join(dir_classes, f).replace("jpg", "txt"))]
 tesseract_conf_threshold = 10
 cosine_similarity_threshold = 0.4
 list_classes = ["company", "date", "address", "total"]
 nb_classes = len(list_classes)
-
-print("Number of input files : ", len(list_filenames))
 
 def add_row_gt_pd(row, c, gt_pd):
     return gt_pd.append({
@@ -36,22 +65,22 @@ def add_row_gt_pd(row, c, gt_pd):
             'class':c
             }, ignore_index = True)
 
-#list_filenames = ["X51008042783.jpg"]
-for filename in list_filenames:
-    ## Tesseract OCR
+def extract_tesseract_information(filename):
     img = plt.imread(os.path.join(dir_img, filename), format='jpeg')
-    dt = te.image_to_data(img, config="", output_type=te.Output.DATAFRAME, pandas_config=None)
     print(filename, img.shape)
-
+    
+    dt = te.image_to_data(img, config="", output_type=te.Output.DATAFRAME, pandas_config=None)
     dt = dt[dt['conf']>tesseract_conf_threshold]
     dt["text"] = dt["text"].astype('str')
+    
+    return dt, img.shape
 
-    ## Split character by character
+def get_chargrid(dt):
     chargrid_pd = pd.DataFrame(columns = ['left', 'top', 'width', 'height', 'ord', 'conf'])
-    expand_x = 1
+
     for index, row in dt.iterrows():
         for i in range(0, len(row["text"])):
-            row['width'] = (row['width']+len(row["text"])-1)//len(row["text"])*len(row["text"])
+            row['width'] = (row['width']+len(row["text"])-1)//len(row["text"])*len(row["text"]) # Split character by character
         
             chargrid_pd = chargrid_pd.append({
             'left':row['left']+row['width']*i//len(row["text"]),
@@ -66,11 +95,12 @@ for filename in list_filenames:
     chargrid_pd = chargrid_pd[chargrid_pd['ord']<=126]
     chargrid_pd['ord'] -= 32
     
-    #print(chargrid_pd)
-    #plot_chargrid(img, chargrid_pd)
+    return chargrid_pd
     
-    ## Extract boxes with classes
+def extract_class_bounding_boxes(filename):
     gt_pd = pd.DataFrame(columns = ['left', 'top', 'right', 'bot', 'class'])
+    
+    ## Import ground truth files
     pd_boxes = pd.DataFrame(columns=['top_left_x', 'top_left_y', 'top_right_x', 'top_right_y', 'bot_left_x', 'bot_left_y', 'bot_right_x', 'bot_right_y', 'text'])
     dic_class = dict()
     
@@ -95,6 +125,7 @@ for filename in list_filenames:
             dic_class[list_classes[i]] = "UNKNOWN"
         dic_class[list_classes[i]] = dic_class[list_classes[i]].upper()
     
+    ## Detect classes in the bounding box file
     vectorized_text = CountVectorizer().fit_transform([dic_class[list_classes[i]] for i in range(nb_classes)]+pd_boxes["text"].tolist())
     
     for index, row in pd_boxes.iterrows():
@@ -119,29 +150,33 @@ for filename in list_filenames:
                 if float(total_float.group(0)) == float(flo):
                     gt_pd = add_row_gt_pd(row, 1, gt_pd)
     
-    #print(gt_pd)
+    return gt_pd
 
-    ## Save numpy arrays
-    chargrid_np = np.array([0]*img.shape[0]*img.shape[1]).reshape((img.shape[0], img.shape[1]))
-    chargrid_pd.sort_values(by="conf", ascending=True, inplace=True)
+def plot_input_vs_output(input, output):
+    fig, (ax1, ax2) = plt.subplots(1, 2, sharey=True)
+    ax1.imshow(input)
+    ax2.imshow(output)
+    plt.show()
+    plt.clf()
+
+def get_reduced_output(chargrid_pd, gt_pd, img_shape):
+    chargrid_np = np.array([0]*img_shape[0]*img_shape[1]).reshape((img_shape[0], img_shape[1]))
+    
+    chargrid_pd.sort_values(by="conf", ascending=True, inplace=True) #Sort by confidence
     chargrid_pd.reset_index(drop=True, inplace=True)
+    
     for index, row in chargrid_pd.iterrows():
         chargrid_np[row['top']:row['top']+row['height'], row['left']:row['left']+row['width']] = row['ord']
     
-    gt_np = np.array([0]*img.shape[0]*img.shape[1]).reshape((img.shape[0], img.shape[1]))
-    gt_pd.sort_values(by="class", ascending=True, inplace=True)
+    gt_np = np.array([0]*img_shape[0]*img_shape[1]).reshape((img_shape[0], img_shape[1]))
+    
+    gt_pd.sort_values(by="class", ascending=True, inplace=True) #Sort by confidence
     gt_pd.reset_index(drop=True, inplace=True)
+    
     for index, row in gt_pd.iterrows():
         gt_np[row['top']:row['bot'], row['left']:row['right']] = row['class']
     
-    #fig, (ax1, ax2) = plt.subplots(1, 2, sharey=True)
-    #ax1.imshow(chargrid_np)
-    #ax2.imshow(gt_np)
-    #plt.show()
-    #plt.clf()
-    
-    #print(gt_pd)
-    
+    ## Remove empty rows and columns
     tab_cumsum_todelete_x = np.cumsum(np.all(chargrid_np == 0, axis=0))
     gt_pd['left'] -= tab_cumsum_todelete_x[gt_pd['left'].tolist()]
     gt_pd['right'] -= tab_cumsum_todelete_x[gt_pd['right'].tolist()]
@@ -150,29 +185,41 @@ for filename in list_filenames:
     gt_pd['top'] -= tab_cumsum_todelete_y[gt_pd['top'].tolist()]
     gt_pd['bot'] -= tab_cumsum_todelete_y[gt_pd['bot'].tolist()]
     
-    #print(gt_pd)
-    
     gt_np = gt_np[:,~np.all(chargrid_np == 0, axis=0)]
     gt_np = gt_np[~np.all(chargrid_np == 0, axis=1),:]
     
     chargrid_np = chargrid_np[:,~np.all(chargrid_np == 0, axis=0)]
     chargrid_np = chargrid_np[~np.all(chargrid_np == 0, axis=1),:]
     
-    #fig, (ax1, ax2) = plt.subplots(1, 2, sharey=True)
-    #ax1.imshow(chargrid_np)
-    #ax2.imshow(gt_np)
-    #plt.show()
-    #plt.clf()
+    return chargrid_np, gt_np, gt_pd
     
-    #np.save(os.path.join(outdir_np_chargrid, filename).replace("jpg", "npy"), chargrid_np)
-    #np.save(os.path.join(outdir_np_gt, filename).replace("jpg", "npy"), gt_np)
-    gt_pd.to_pickle(os.path.join(outdir_pd_bbox, filename).replace("jpg", "pkl"))
+
+if __name__ == "__main__":
+    list_filenames = [f for f in os.listdir(dir_img) if os.path.isfile(os.path.join(dir_img, f)) and os.path.isfile(os.path.join(dir_boxes, f).replace("jpg", "txt")) and os.path.isfile(os.path.join(dir_classes, f).replace("jpg", "txt"))]
     
-    ## Save chargrid png
-    #plt.imshow(chargrid_np)
-    #plt.savefig(os.path.join(outdir_png_chargrid, filename).replace("jpg", "png"))
-    #plt.close()
+    print("Number of input files : ", len(list_filenames))
     
-    #plt.imshow(gt_np)
-    #plt.savefig(os.path.join(outdir_png_gt, filename).replace("jpg", "png"))
-    #plt.close()
+    for filename in list_filenames:
+        dt, img_shape = extract_tesseract_information(filename)
+        
+        chargrid_pd = get_chargrid(dt)
+        
+        gt_pd = extract_class_bounding_boxes(filename)
+        
+        chargrid_np, gt_np, gt_pd = get_reduced_output(chargrid_pd, gt_pd, img_shape)
+        
+        #plot_input_vs_output(chargrid_np, gt_np)
+        #print(gt_pd)
+        
+        ##Saving
+        np.save(os.path.join(outdir_np_chargrid, filename).replace("jpg", "npy"), chargrid_np)
+        np.save(os.path.join(outdir_np_gt, filename).replace("jpg", "npy"), gt_np)
+        gt_pd.to_pickle(os.path.join(outdir_pd_bbox, filename).replace("jpg", "pkl"))
+        
+        plt.imshow(chargrid_np)
+        plt.savefig(os.path.join(outdir_png_chargrid, filename).replace("jpg", "png"))
+        plt.close()
+        
+        plt.imshow(gt_np)
+        plt.savefig(os.path.join(outdir_png_gt, filename).replace("jpg", "png"))
+        plt.close()
