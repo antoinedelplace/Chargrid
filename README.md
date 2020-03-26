@@ -54,7 +54,7 @@ The number of classes successfully extracted from the bounding boxes with the js
 [TODO]
 
 ## Possible improvements
-- Remove one-hot encoding and use categorical cross-entropy (more memory-effective)
+- Remove one-hot encoding and use categorical cross-entropy (more memory-efficient)
 - Implement focal cross-entropy loss
 
 ## References
