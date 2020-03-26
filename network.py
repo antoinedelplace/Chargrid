@@ -1,22 +1,57 @@
+# -*- coding: utf-8 -*-
+# Author: Antoine DELPLACE
+# Last update: 26/03/2020
+"""
+Main program to train and test the chargrid model
+
+Requirements
+----------
+- One-hot Chargrid arrays must be located in the folder dir_np_chargrid_1h = "./data/np_chargrids_1h/"
+- One-hot Segmentation arrays must be located in the folder dir_np_gt_1h = "./data/np_gt_1h/"
+- Bounding Box anchor masks must be located in the folder dir_np_bbox_anchor_mask = "./data/np_bbox_anchor_mask/"
+- Bounding Box anchor coordinates must be located in the folder dir_np_bbox_anchor_coord = "./data/np_bbox_anchor_coord/"
+
+Hyperparameters
+----------
+- (width, height, input_channels) : input shape of one-hot chargrids
+- base_channels : number of base channels for the neural network
+- (learning_rate, momentum) : parameters of the optimizer
+- weight_decay : coefficient used by the l2-regularizer
+- spatial_dropout : dropout rate
+- nb_classes : number of classes
+- proba_classes : probability of each class to appear (classes in this order: other, total, address, company, date)
+- constant_weight : constant used to balance class weights
+- nb_anchors : number of anchors
+- (epochs, batch_size) : parameters for the training process
+- prop_test : proportion of the dataset used to validate the model
+- seed : seed used to generate randomness (shuffling, ...)
+- (pad_left_range, pad_top_range, pad_right_range, pad_bot_range) : padding range used for data augmentation
+
+Return
+----------
+Several files are generated in the "./output/" folder :
+- filename_backup = "./output/model.ckpt" : the model weights for post-training use
+- "global_loss.pdf" : plot of the curve containing the global loss functions
+- "output_1_loss.pdf" : plot of the curve containing the segmentation loss functions
+- "output_2_loss.pdf" : plot of the curve containing the anchor mask loss functions
+- "output_3_loss.pdf" : plot of the curve containing the anchor coordinate loss functions
+- "train_time.pdf" : plot the time spent to train each epoch
+- "test_time.pdf"  : plot the time spent to validate each epoch
+"""
+
 import numpy as np
 import tensorflow as tf
+from tensorflow.python.client import device_lib
 import matplotlib.pyplot as plt
 import os
 import time
 from skimage.transform import resize, rescale
-
-# Hardware configuration
-from tensorflow.python.client import device_lib
-print(device_lib.list_local_devices())
-print("Tensorflow version: ", tf.__version__)
-print("Test GPU: ", tf.test.gpu_device_name())
 
 ## Hyperparameters
 dir_np_chargrid_1h = "./data/np_chargrids_1h/"
 dir_np_gt_1h = "./data/np_gt_1h/"
 dir_np_bbox_anchor_mask = "./data/np_bbox_anchor_mask/"
 dir_np_bbox_anchor_coord = "./data/np_bbox_anchor_coord/"
-list_filenames = [f for f in os.listdir(dir_np_chargrid_1h) if os.path.isfile(os.path.join(dir_np_chargrid_1h, f))]
 width = 128
 height = 256
 input_channels = 61
@@ -38,6 +73,13 @@ pad_left_range = 0.2
 pad_top_range = 0.2
 pad_right_range = 0.2
 pad_bot_range = 0.2
+
+np.random.seed(seed=seed)
+
+def print_hardware_configuration():
+    print(device_lib.list_local_devices())
+    print("Tensorflow version: ", tf.__version__)
+    print("Test GPU: ", tf.test.gpu_device_name())
 
 class Network(tf.keras.Model):
     def __init__(self):
@@ -249,7 +291,6 @@ class Network(tf.keras.Model):
 
 
     def call(self, input):
-        #print("input shape = ", input.shape)
         ## Encoder
         x = self.z1(input)
         x = self.z1_lrelu(x)
@@ -367,10 +408,6 @@ class Network(tf.keras.Model):
         x = self.f2_bn(x)
         out_f = self.f3(x)
         
-        #print("seg shape = ", out_d.shape)
-        #print("boxmask shape = ", out_e.shape)
-        #print("boxcoord shape = ", out_f.shape)
-        
         return out_d, out_e, out_f
 
 def augment_data(data, tab_rand, order, shape, coord=False):
@@ -397,7 +434,7 @@ def augment_data(data, tab_rand, order, shape, coord=False):
 
     return data_temp
 
-def extract_batch(dataset, batch_size, pad_left_range, pad_top_range, pad_right_range, pad_bot_range):
+def extract_batch(dataset, batch_size, pad_left_range, pad_top_range, pad_right_range, pad_bot_range): # Data augmentation
     if batch_size > len(dataset):
         raise NameError('batch_size > len(dataset)')
     np.random.shuffle(dataset)
@@ -425,74 +462,59 @@ def extract_batch(dataset, batch_size, pad_left_range, pad_top_range, pad_right_
         
     return np.array(chargrid_input), np.array(seg_gt), np.array(anchor_mask_gt), np.array(anchor_coord_gt)
 
-# Class weights
-sample_weight_seg = np.ones((height, width, nb_classes))*1.0/np.log(constant_weight+proba_classes)
-#print(sample_weight_seg)
+def get_class_weights():
+    sample_weight_seg = np.ones((height, width, nb_classes))*1.0/np.log(constant_weight+proba_classes)
 
-proba_classes_boxmask = np.repeat(proba_classes[1:], 2)
-proba_classes_boxmask[np.arange(1, 2*nb_anchors, 2)] = 1-proba_classes[1:]
-#print(proba_classes_boxmask)
+    proba_classes_boxmask = np.repeat(proba_classes[1:], 2)
+    proba_classes_boxmask[np.arange(1, 2*nb_anchors, 2)] = 1-proba_classes[1:]
+    sample_weight_boxmask = np.ones((height, width, 2*nb_anchors))*1.0/np.log(constant_weight+proba_classes_boxmask)
+    
+    return sample_weight_seg, sample_weight_boxmask
 
-sample_weight_boxmask = np.ones((height, width, 2*nb_anchors))*1.0/np.log(constant_weight+proba_classes_boxmask)
-#print(sample_weight_boxmask)
+def initialize_network(sample_weight_seg, sample_weight_boxmask):
+    net = Network()
+    
+    losses = {'output_1': tf.keras.losses.BinaryCrossentropy(), 'output_2': tf.keras.losses.BinaryCrossentropy(), 'output_3': tf.keras.losses.Huber()}
+    sample_weights = {'output_1': sample_weight_seg, 'output_2': sample_weight_boxmask}
+    
+    net.compile(optimizer=tf.keras.optimizers.SGD(learning_rate=learning_rate, momentum=momentum, nesterov=False), loss=losses, sample_weight=sample_weights)
+    net.build((None, height, width, input_channels))
+    
+    return net
 
-## Initialize Network
-net = Network()
-losses = {'output_1': tf.keras.losses.BinaryCrossentropy(), 'output_2': tf.keras.losses.BinaryCrossentropy(), 'output_3': tf.keras.losses.Huber()}
-sample_weights = {'output_1': sample_weight_seg, 'output_2': proba_classes_boxmask}
-net.compile(optimizer=tf.keras.optimizers.SGD(learning_rate=learning_rate, momentum=momentum, nesterov=False), loss=losses, sample_weight=sample_weights)
-net.build((None, height, width, input_channels))
-#net.summary()
+def get_train_test_sets(list_filenames):
+    np.random.shuffle(list_filenames)
+    
+    trainset = list_filenames[int(len(list_filenames)*prop_test):]
+    testset = list_filenames[:int(len(list_filenames)*prop_test)]
+    
+    return trainset, testset
 
-## Separate train and test sets
-np.random.seed(seed=seed)
-np.random.shuffle(list_filenames)
-testset = list_filenames[:int(len(list_filenames)*prop_test)]
-trainset = list_filenames[int(len(list_filenames)*prop_test):]
-print("trainset: ", len(trainset), " - testset: ", len(testset))
+def compare_input_augmented_input(index_to_test, trainset, batch_chargrid, batch_seg, batch_mask, batch_coord):
+    fig, (ax1, ax2) = plt.subplots(1, 2)
+    ax1.imshow(np.apply_along_axis(np.argmax, axis=2, arr=np.load(os.path.join(dir_np_chargrid_1h, trainset[index_to_test]))))
+    ax2.imshow(np.apply_along_axis(np.argmax, axis=2, arr=batch_chargrid[index_to_test]))
+    plt.show()
+    plt.clf()
 
-"""
-## Data augmentation
-batch_chargrid, batch_seg, batch_mask, batch_coord = extract_batch(trainset, batch_size, pad_left_range, pad_top_range, pad_right_range, pad_bot_range)
+    fig, (ax1, ax2) = plt.subplots(1, 2)
+    ax1.imshow(np.apply_along_axis(np.argmax, axis=2, arr=np.load(os.path.join(dir_np_gt_1h, trainset[index_to_test]))))
+    ax2.imshow(np.apply_along_axis(np.argmax, axis=2, arr=batch_seg[index_to_test]))
+    plt.show()
+    plt.clf()
 
-index_to_test = 2
-fig, (ax1, ax2) = plt.subplots(1, 2)
-ax1.imshow(np.apply_along_axis(np.argmax, axis=2, arr=np.load(os.path.join(dir_np_chargrid_1h, trainset[index_to_test]))))
-ax2.imshow(np.apply_along_axis(np.argmax, axis=2, arr=batch_chargrid[index_to_test]))
-plt.show()
-plt.clf()
+    fig, (ax1, ax2) = plt.subplots(1, 2)
+    ax1.imshow(np.load(os.path.join(dir_np_bbox_anchor_mask, trainset[index_to_test]))[:, :, 0])
+    ax2.imshow(batch_mask[index_to_test][:, :, 0])
+    plt.show()
+    plt.clf()
 
-fig, (ax1, ax2) = plt.subplots(1, 2)
-ax1.imshow(np.apply_along_axis(np.argmax, axis=2, arr=np.load(os.path.join(dir_np_gt_1h, trainset[index_to_test]))))
-ax2.imshow(np.apply_along_axis(np.argmax, axis=2, arr=batch_seg[index_to_test]))
-plt.show()
-plt.clf()
-
-fig, (ax1, ax2) = plt.subplots(1, 2)
-ax1.imshow(np.load(os.path.join(dir_np_bbox_anchor_mask, trainset[index_to_test]))[:, :, 0])
-ax2.imshow(batch_mask[index_to_test][:, :, 0])
-plt.show()
-plt.clf()
-
-print(batch_coord[index_to_test][(batch_coord[index_to_test] > 1e-6)[:, :, 0], 0]*width)
-fig, (ax1, ax2) = plt.subplots(1, 2)
-ax1.imshow(np.load(os.path.join(dir_np_bbox_anchor_coord, trainset[index_to_test]))[:, :, 0])
-ax2.imshow(batch_coord[index_to_test][:, :, 0])
-plt.show()
-plt.clf()
-"""
-
-history_time_train = []
-history_loss = []
-history_loss_output1 = []
-history_loss_output2 = []
-history_loss_output3 = []
-
-history_time_test = []
-history_val_loss = []
-history_val_loss_output1 = []
-history_val_loss_output2 = []
-history_val_loss_output3 = []
+    print(batch_coord[index_to_test][(batch_coord[index_to_test] > 1e-6)[:, :, 0], 0]*width)
+    fig, (ax1, ax2) = plt.subplots(1, 2)
+    ax1.imshow(np.load(os.path.join(dir_np_bbox_anchor_coord, trainset[index_to_test]))[:, :, 0])
+    ax2.imshow(batch_coord[index_to_test][:, :, 0])
+    plt.show()
+    plt.clf()
 
 def plot_loss(history_train, history_test, title, filename):
     plt.figure(figsize=(8, 8))
@@ -520,10 +542,22 @@ def plot_time(history_time, title, filename):
     plt.savefig(filename, format="pdf")
     plt.close()
 
-def train():
+def train(net, trainset, testset):
+    history_time_train = []
+    history_loss = []
+    history_loss_output1 = []
+    history_loss_output2 = []
+    history_loss_output3 = []
+
+    history_time_test = []
+    history_val_loss = []
+    history_val_loss_output1 = []
+    history_val_loss_output2 = []
+    history_val_loss_output3 = []
+    
     tps = time.time()
     for epoch in range(epochs):
-        #Train
+        #Training
         tps_train = time.time()
         batch_chargrid, batch_seg, batch_mask, batch_coord = extract_batch(trainset, batch_size, pad_left_range, pad_top_range, pad_right_range, pad_bot_range)
         
@@ -534,7 +568,7 @@ def train():
         history_loss_output2.append(history.history["output_2_loss"])
         history_loss_output3.append(history.history["output_3_loss"])
         
-        #Test
+        #Validation
         tps_test = time.time()
         batch_chargrid, batch_seg, batch_mask, batch_coord = extract_batch(testset, batch_size, pad_left_range, pad_top_range, pad_right_range, pad_bot_range)
         
@@ -544,10 +578,29 @@ def train():
         history_val_loss_output1.append(history_val[1])
         history_val_loss_output2.append(history_val[2])
         history_val_loss_output3.append(history_val[3])
-        
-        
-    print("Execution time = ", time.time()-tps)
+    
+    return history_time_train, history_loss, history_loss_output1, history_loss_output2, history_loss_output3, history_time_test, history_val_loss, history_val_loss_output1, history_val_loss_output2, history_val_loss_output3, time.time()-tps
 
+
+if __name__ == "__main__":
+    print_hardware_configuration()
+    
+    list_filenames = [f for f in os.listdir(dir_np_chargrid_1h) if os.path.isfile(os.path.join(dir_np_chargrid_1h, f))]
+    
+    trainset, testset = get_train_test_sets(list_filenames)
+    print("trainset: ", len(trainset), " - testset: ", len(testset))
+    
+    #batch_chargrid, batch_seg, batch_mask, batch_coord = extract_batch(trainset, batch_size, pad_left_range, pad_top_range, pad_right_range, pad_bot_range)
+    #compare_input_augmented_input(2, trainset, batch_chargrid, batch_seg, batch_mask, batch_coord)
+    
+    sample_weight_seg, sample_weight_boxmask = get_class_weights()
+    
+    net = initialize_network(sample_weight_seg, sample_weight_boxmask)
+    #net.summary()
+    
+    history_time_train, history_loss, history_loss_output1, history_loss_output2, history_loss_output3, history_time_test, history_val_loss, history_val_loss_output1, history_val_loss_output2, history_val_loss_output3, exec_time = train(net, trainset, testset)
+    print("Execution time = ", exec_time)
+    
     net.save_weights(filename_backup)
     
     ## Plot loss
@@ -559,5 +612,4 @@ def train():
     ## Plot time
     plot_time(history_time_train, "Train time", "./output/train_time.pdf")
     plot_time(history_time_test, "Test time", "./output/test_time.pdf")
-
-train()
+    
